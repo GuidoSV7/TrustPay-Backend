@@ -1,0 +1,334 @@
+---
+alwaysApply: true
+---
+You have access to Engram persistent memory (mem_save, mem_search, mem_context).
+Save proactively after significant work. After context resets, call mem_context to recover state.
+
+---
+
+# SECCIÓN 1 — Reglas Globales
+
+## Seguridad
+- Siempre seguir las reglas de securityRules/SecurityBackend.md
+
+## Caché
+- No usar caché para respuestas de API. Siempre leer desde la capa de datos con paginación.
+
+## Paginación
+- Todos los endpoints de listado deben aceptar `PaginationDto` (page, limit) y devolver `{ data, total, page, totalPages }`.
+- Nunca devolver listas completas sin paginar.
+
+## Roles y Guards
+- Todos los endpoints no públicos requieren `JwtAuthGuard` + `RolesGuard` + `@Roles('ADMIN')`.
+- Rutas públicas: solo login, register y las definidas en securityRules.
+- Un mismo recurso puede tener controller público (lectura) y controller admin (CRUD) con distinto prefijo.
+
+## Rate Limiting
+- ✅ Opt-in con `@Throttle()` solo en endpoints críticos: login, register, pagos, reset de contraseña.
+- ✅ ThrottlerModule global con límite alto (999999 req/min); los decoradores aplican los límites reales.
+- ✅ Ejemplo: `@Throttle({ default: { limit: 20, ttl: 60000 } })` sobre el método del controller.
+- ❌ NUNCA guards personalizados con lógica de exclusión de rutas.
+- ❌ NUNCA rate limiting global restrictivo.
+
+---
+
+# SECCIÓN 2 — Estructura de Módulos NestJS
+
+## Estructura de directorios
+```
+src/[module-name]/
+├── dto/
+│   ├── create-[name].dto.ts
+│   ├── update-[name].dto.ts
+│   └── [other].dto.ts
+├── schemas/
+│   ├── create-[name].schema.ts
+│   ├── update-[name].schema.ts
+│   └── [other].schema.ts
+├── entities/
+│   └── [name].entity.ts
+├── [name].controller.ts
+├── [name].service.ts
+└── [name].module.ts
+```
+
+## Convenciones de nombres
+- Carpetas: `kebab-case` → `google-auth`, `user-profiles`
+- DTOs: `create-product.dto.ts`, `update-product.dto.ts`
+- Entidades: `product.entity.ts` (singular)
+- Controllers/Services/Modules: `products.controller.ts` (plural)
+
+## Controller
+- Decoradores: `@Controller`, `@Get`, `@Post`, `@Patch`, `@Delete`
+- Inyectar Service en el constructor
+- Validar entrada con **Zod** (schemas) y `ZodValidationPipe`; el tipo del body/query se infiere del schema (`z.infer`).
+- Retornar respuestas del Service directamente
+
+## Service
+- `@Injectable()` + `@InjectRepository()` + `Logger`
+- Inyectar `DataSource` para transacciones
+- Métodos CRUD estándar: `create`, `findAll`, `findOne`, `update`, `remove`
+- `QueryBuilder` para consultas complejas; `findAndCount` para consultas simples
+- Transacciones con `QueryRunner` para operaciones multi-tabla
+
+---
+
+# SECCIÓN 3 — Buenas Prácticas de Service
+
+### 1. findOrFail — centralizar búsqueda + excepción
+Nunca repetir `findOne` + `NotFoundException` en cada método. Usar un helper privado.
+
+```typescript
+// ❌
+const user = await this.userRepository.findOne({ where: { id } });
+if (!user) throw new NotFoundException(`Usuario ${id} no encontrado`);
+
+// ✅
+private async findOrFail(id: string) {
+  const user = await this.userRepository.findOne({ where: { id } });
+  if (!user) throw new NotFoundException(`Usuario ${id} no encontrado`);
+  return user;
+}
+```
+
+> Excepción: si se necesita `select` específico (ej: traer `password`), hacer la query directo en ese método.
+
+---
+
+### 2. Spread del DTO en create()
+Usar spread en vez de asignar campo por campo. Excluir campos que no existen en la entidad.
+
+```typescript
+// ❌
+const user = this.userRepository.create({
+  email: dto.email,
+  fullName: dto.fullName,
+  password: bcrypt.hashSync(dto.password, 10),
+});
+
+// ✅
+const { password, ...userDetails } = createUserDto;
+const user = this.userRepository.create({
+  ...userDetails,
+  password: bcrypt.hashSync(password, 10),
+});
+```
+
+> Si el DTO tiene campos que no existen en la entidad: `const { roleIds, ...rest } = dto`.
+> Con Zod, los campos opcionales se definen en el schema (`.optional()`, `.nullable()`) y se puede usar `.transform(v => v ?? null)` para que el service reciba siempre `null` cuando falte el valor; así se evita poner `?? null` en el service.
+
+---
+
+### 3. Object.assign en update()
+Nunca usar `Partial<Entity>` como tipo. Definir `UpdateDto` y aplicar con `Object.assign`.
+
+```typescript
+// ❌
+async update(id: string, data: Partial<User>) {
+  if (data.fullName !== undefined) user.fullName = data.fullName;
+}
+
+// ✅
+async update(id: string, data: UpdateUserDto) {
+  const user = await this.findOrFail(id);
+  Object.assign(user, data);
+  return this.userRepository.save(user);
+}
+```
+
+> Si el DTO incluye `password`, hashearlo antes del `Object.assign`.
+
+---
+
+### 4. findAndCount para consultas simples
+Reservar `QueryBuilder` para joins complejos. Para filtros simples usar `findAndCount`.
+
+```typescript
+// ✅ — ambos filtros coexisten en todas las ramas
+const [items, total] = await this.repository.findAndCount({
+  where: search
+    ? [
+        { fullName: ILike(`%${search}%`), ...(includeInactive ? {} : { isActive: true }) },
+        { email:    ILike(`%${search}%`), ...(includeInactive ? {} : { isActive: true }) },
+      ]
+    : includeInactive ? {} : { isActive: true },
+  order: { createdAt: 'DESC' },
+  skip,
+  take: limit,
+});
+```
+
+> Bug frecuente: usar array de condiciones con `search` y perder otros filtros como `isActive`.
+
+---
+
+### 5. Manejo de errores en try/catch
+Siempre lanzar excepciones, nunca retornar el error como valor.
+
+```typescript
+// ❌ — devuelve 200 OK con string de error
+} catch (error) {
+  return error.message;
+}
+
+// ✅
+} catch (error) {
+  this.logger.error(error.message, error.stack);
+  throw new InternalServerErrorException(error.message);
+}
+```
+
+---
+
+### 6. Campos sensibles con select: false
+Marcar `password` y tokens en la entidad para que nunca aparezcan en resultados.
+
+```typescript
+// entity
+@Column({ select: false })
+password: string;
+
+// cuando se necesita puntualmente
+const user = await this.userRepository.findOne({
+  where: { id },
+  select: { password: true, id: true },
+});
+```
+
+---
+
+### 7. Nombres honestos
+El nombre del método debe reflejar exactamente lo que hace.
+
+```typescript
+// ❌ delete() que solo desactiva
+async delete(id: string) { user.isActive = false; }
+
+// ✅
+async deactivate(id: string) { user.isActive = false; }
+```
+
+---
+
+### 8. Eliminar wrappers inútiles
+Si un método solo llama a otro sin agregar lógica, eliminarlo.
+
+```typescript
+// ❌
+async findAll(pagination, search?) {
+  return this.findAllComplete(pagination, search);
+}
+
+// ✅ — dejar solo el método real
+async findAll(pagination: PaginationDto, search?: string) { ... }
+```
+
+---
+
+# SECCIÓN 4 — Buenas Prácticas de Base de Datos
+
+### 1. Índices
+- Índice único en campos de búsqueda frecuente (`slug`, `email`).
+- Índice en campos de filtro (`isActive`, `state`).
+- Índices en FKs de relaciones frecuentemente consultadas.
+
+### 2. Consultas de existencia optimizadas
+```typescript
+// ✅ — pedir solo el campo mínimo
+await this.userRepository.findOne({
+  where: { email },
+  select: { id: true },
+});
+```
+
+### 3. Transacciones para operaciones multi-tabla
+```typescript
+const queryRunner = this.dataSource.createQueryRunner();
+await queryRunner.connect();
+await queryRunner.startTransaction();
+try {
+  await queryRunner.commitTransaction();
+} catch (error) {
+  await queryRunner.rollbackTransaction();
+  throw error;
+} finally {
+  await queryRunner.release();
+}
+```
+
+### 4. Soft delete
+- Usar `isActive = false` o `@DeleteDateColumn()` según el caso.
+- Siempre en transacción si afecta múltiples tablas.
+
+---
+
+# SECCIÓN 5 — Tipado y Validación (Zod obligatorio)
+
+### 1. Nunca usar `any`
+Usar `unknown` o tipos concretos. Aprovechar genéricos de `Repository<T>`.
+
+### 2. Validación con Zod (obligatoria)
+- **Usar Zod como única fuente de verdad** para validación de entrada (body, query, params). No usar class-validator para validar requests.
+- Si falta un dato **requerido**, Zod falla y el `ZodValidationPipe` debe lanzar `BadRequestException` con el mensaje de error (p. ej. `result.error.flatten()` o `formatErrors(result.error)`), de modo que el backend indique claramente qué data falta o es inválida.
+- Definir un schema por recurso/acción en `src/[module]/schemas/` (ej. `create-qr-code.schema.ts`, `update-user.schema.ts`) y exportar el tipo con `z.infer<typeof schema>`.
+
+```typescript
+// src/qr-codes/schemas/create-qr-code.schema.ts
+import { z } from 'zod';
+
+export const createQrCodeSchema = z.object({
+  label: z.string().min(1),
+  type: z.string().min(1),
+  amountLamports: z.string().nullable().optional().transform(v => v ?? null),
+  tokenMint: z.string().nullable().optional().transform(v => v ?? null),
+  solanaPayUrl: z.string().min(1),
+  qrImageUrl: z.string().nullable().optional().transform(v => v ?? null),
+});
+export type CreateQrCodeDto = z.infer<typeof createQrCodeSchema>;
+```
+
+- **Campos requeridos:** sin `.optional()`; si el cliente no los envía, la validación falla y se responde 400 con el detalle.
+- **Campos opcionales / nullable:** usar `.optional().nullable()` y, si se quiere evitar `?? null` en el service, `.transform(v => v ?? null)` para normalizar `undefined` a `null`. Así el service recibe siempre un objeto con valores definidos (string o null) y no hay que "ensuciar" el código con `?? null`.
+
+### 3. ZodValidationPipe (obligatorio)
+```typescript
+// src/common/pipes/zod-validation.pipe.ts
+export class ZodValidationPipe implements PipeTransform {
+  constructor(private schema: ZodSchema) {}
+  transform(value: unknown) {
+    const result = this.schema.safeParse(value);
+    if (!result.success) throw new BadRequestException(result.error.flatten());
+    return result.data;
+  }
+}
+```
+
+- Usar el pipe en cada endpoint que reciba body/query (ej. `@Body(new ZodValidationPipe(createQrCodeSchema))` o con un decorator que inyecte el schema).
+
+### 4. Serialización en respuestas
+- `@Exclude()` (class-transformer) para campos que nunca deben exponerse en entidades.
+- `@Expose()` para exponer solo campos explícitos.
+- `plainToInstance(ResponseDto, entity, { excludeExtraneousValues: true })` al retornar desde el service, o mapeo manual / spread cuando corresponda.
+- Configurar `ClassSerializerInterceptor` globalmente si se usan DTOs de respuesta con decoradores.
+
+---
+
+# SECCIÓN 6 — Separación de Responsabilidades
+
+- Extraer lógica reutilizable a métodos privados (`slugify`, `validateCategories`, `findOrFail`).
+- Un service = lógica de negocio de un recurso. No mezclar responsabilidades de otros módulos.
+- Helpers transversales van en `src/common/`.
+
+```
+src/common/
+├── pipes/
+│   └── zod-validation.pipe.ts
+├── schemas/
+│   └── pagination.schema.ts
+├── helpers/
+│   └── pagination.helper.ts
+└── decorators/
+    └── roles.decorator.ts
+```
+
+- Cada módulo que reciba input (body/query) debe tener sus schemas Zod en `src/[module]/schemas/` y usar `ZodValidationPipe` en el controller. Los tipos de los DTOs se obtienen con `z.infer<typeof schema>`.
