@@ -10,6 +10,7 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
+  await app.listen(port, '0.0.0.0'); // 0.0.0.0 es obligatorio
 
   // Validación de entrada con Zod (ZodValidationPipe por endpoint)
   // No se usa ValidationPipe global
