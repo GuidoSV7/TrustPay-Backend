@@ -10,7 +10,7 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
-  await app.listen(port, '0.0.0.0'); // 0.0.0.0 es obligatorio
+
 
   // Validación de entrada con Zod (ZodValidationPipe por endpoint)
   // No se usa ValidationPipe global
@@ -24,7 +24,7 @@ async function bootstrap() {
   app.useGlobalFilters(new ThrottlerExceptionFilter());
   
   app.useStaticAssets(join(__dirname, '../public'))
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0'); // 0.0.0.0 es obligatorio
   console.log(`🚀 Servidor corriendo en http://localhost:${port}`);
 }
 bootstrap();
