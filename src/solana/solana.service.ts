@@ -44,6 +44,11 @@ export class SolanaService implements OnModuleInit {
     );
   }
 
+  /** Conexión RPC (Solana Pay, polling de pagos, etc.). */
+  getConnection(): Connection {
+    return this.connection;
+  }
+
   // ─── helpers ──────────────────────────────────────────────────────────────
 
   /** Calcula el discriminador de instrucción: sha256("global:<name>")[0..8] */

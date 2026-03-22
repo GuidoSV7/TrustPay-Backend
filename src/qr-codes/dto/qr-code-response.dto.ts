@@ -7,6 +7,10 @@ export class QrCodeResponseDto {
   tokenMint: string | null;
   solanaPayUrl: string;
   qrImageUrl: string | null;
+  /** Pubkey `reference` (Solana Pay) para correlacionar el pago on-chain. */
+  referencePubkey: string | null;
+  paymentConfirmedAt: Date | null;
+  paymentSignature: string | null;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;

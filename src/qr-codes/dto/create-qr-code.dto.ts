@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
+/** Legacy DTO; la API usa Zod (`createQrCodeSchema`). URL e imagen las genera el backend. */
 export class CreateQrCodeDto {
   @IsString()
   @IsNotEmpty()
@@ -16,12 +17,4 @@ export class CreateQrCodeDto {
   @IsOptional()
   @IsString()
   tokenMint?: string | null;
-
-  @IsString()
-  @IsNotEmpty()
-  solanaPayUrl: string;
-
-  @IsOptional()
-  @IsString()
-  qrImageUrl?: string | null;
 }

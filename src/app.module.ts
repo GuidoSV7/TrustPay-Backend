@@ -18,10 +18,12 @@ import { SolanaModule } from './solana/solana.module';
 import { QrCodesModule } from './qr-codes/qr-codes.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 999999 }]),
     CommonModule,
     TypeOrmModule.forRootAsync({

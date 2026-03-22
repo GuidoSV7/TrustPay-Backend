@@ -19,6 +19,7 @@ import {
   PaginatedResponse,
   paginated,
 } from '../common/dto/pagination.dto';
+import { SolanaPayQrService } from '../solana/solana-pay-qr.service';
 
 @Injectable()
 export class QrCodesService {
@@ -27,6 +28,7 @@ export class QrCodesService {
   constructor(
     @InjectRepository(QrCode) private readonly repo: Repository<QrCode>,
     @InjectRepository(Business) private readonly businessRepo: Repository<Business>,
+    private readonly solanaPayQr: SolanaPayQrService,
   ) {}
 
   private async findQrOrFail(id: string, businessId: string): Promise<QrCode> {
@@ -61,10 +63,27 @@ export class QrCodesService {
     role: string,
     dto: CreateQrCodeDto,
   ): Promise<QrCodeResponseDto> {
-    await this.assertBusinessAccess(businessId, userId, role);
+    const b = await this.assertBusinessAccess(businessId, userId, role);
+    if (!b.isVerified) {
+      throw new BadRequestException(
+        'El negocio debe estar verificado on-chain antes de generar códigos QR de pago',
+      );
+    }
+
+    const { solanaPayUrl, qrImageDataUrl, referencePubkey } =
+      await this.solanaPayQr.buildPaymentQr({
+        recipientWallet: b.walletAddress,
+        label: dto.label,
+        amountLamports: dto.amountLamports,
+        tokenMint: dto.tokenMint,
+      });
+
     const q = this.repo.create({
       ...dto,
       businessId,
+      solanaPayUrl,
+      qrImageUrl: qrImageDataUrl,
+      referencePubkey,
       isActive: true,
     });
     const saved = await this.repo.save(q);
@@ -108,9 +127,35 @@ export class QrCodesService {
     role: string,
     dto: UpdateQrCodeDto,
   ): Promise<QrCodeResponseDto> {
-    await this.assertBusinessAccess(businessId, userId, role);
+    const b = await this.assertBusinessAccess(businessId, userId, role);
     const q = await this.findQrOrFail(id, businessId);
+
+    const paymentFieldsChanged =
+      dto.label !== undefined ||
+      dto.amountLamports !== undefined ||
+      dto.tokenMint !== undefined;
+
     Object.assign(q, dto);
+
+    if (paymentFieldsChanged) {
+      if (!b.isVerified) {
+        throw new BadRequestException(
+          'El negocio debe estar verificado on-chain para actualizar datos de pago del QR',
+        );
+      }
+      const built = await this.solanaPayQr.buildPaymentQr({
+        recipientWallet: b.walletAddress,
+        label: q.label,
+        amountLamports: q.amountLamports,
+        tokenMint: q.tokenMint,
+      });
+      q.solanaPayUrl = built.solanaPayUrl;
+      q.qrImageUrl = built.qrImageDataUrl;
+      q.referencePubkey = built.referencePubkey;
+      q.paymentConfirmedAt = null;
+      q.paymentSignature = null;
+    }
+
     const saved = await this.repo.save(q);
     return this.toResponse(saved);
   }

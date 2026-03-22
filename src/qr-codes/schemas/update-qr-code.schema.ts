@@ -5,8 +5,6 @@ export const updateQrCodeSchema = z.object({
   type: z.string().min(1).optional(),
   amountLamports: z.string().optional().nullable().transform((v) => v ?? null),
   tokenMint: z.string().optional().nullable().transform((v) => v ?? null),
-  solanaPayUrl: z.string().min(1).optional(),
-  qrImageUrl: z.string().optional().nullable().transform((v) => v ?? null),
 });
 
 export type UpdateQrCodeDto = z.infer<typeof updateQrCodeSchema>;

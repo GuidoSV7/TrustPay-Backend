@@ -39,6 +39,17 @@ export class QrCode {
   @Column({ name: 'qr_image_url', type: 'text', nullable: true })
   qrImageUrl: string | null;
 
+  /** Pubkey base58 usada como `reference` en la URL Solana Pay (correlación on-chain). */
+  @Column({ name: 'reference_pubkey', type: 'varchar', length: 44, nullable: true })
+  referencePubkey: string | null;
+
+  /** Primer pago confirmado (MVP: solo se registra el primero por QR). */
+  @Column({ name: 'payment_confirmed_at', type: 'timestamptz', nullable: true })
+  paymentConfirmedAt: Date | null;
+
+  @Column({ name: 'payment_signature', type: 'varchar', length: 88, nullable: true })
+  paymentSignature: string | null;
+
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
