@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { Business } from './entities/business.entity';
 import type { CreateBusinessDto } from './schemas/create-business.schema';
 import type { UpdateBusinessDto } from './schemas/update-business.schema';
@@ -17,6 +18,7 @@ import {
   PaginatedResponse,
   paginated,
 } from '../common/dto/pagination.dto';
+import { SolanaService } from '../solana/solana.service';
 
 @Injectable()
 export class BusinessesService {
@@ -25,6 +27,7 @@ export class BusinessesService {
   constructor(
     @InjectRepository(Business)
     private readonly repo: Repository<Business>,
+    private readonly solana: SolanaService,
   ) {}
 
   private async findBusinessOrFail(id: string): Promise<Business> {
@@ -38,13 +41,29 @@ export class BusinessesService {
   }
 
   async create(userId: string, dto: CreateBusinessDto): Promise<BusinessResponseDto> {
+    // Generamos el UUID antes de persistir para usarlo como puente con la blockchain
+    const businessId = randomUUID();
+
+    // La blockchain es la fuente de verdad: primero registramos on-chain.
+    // Si la transacción falla, la excepción se propaga y nada se guarda en BD.
+    const solanaTxRegister = await this.solana.registrarNegocio(
+      businessId,
+      dto.walletAddress,
+    );
+
     const b = this.repo.create({
       ...dto,
+      id: businessId,
       userId,
       isActive: true,
+      isVerified: false,
+      solanaTxRegister,
+      solanaTxVerify: null,
     });
     const saved = await this.repo.save(b);
-    this.logger.log(`Negocio creado: ${saved.id} (usuario ${userId})`);
+    this.logger.log(
+      `Negocio creado: ${saved.id} | tx: ${solanaTxRegister} | usuario: ${userId}`,
+    );
     return this.toResponse(saved);
   }
 
@@ -98,5 +117,30 @@ export class BusinessesService {
     await this.repo.remove(b);
     this.logger.log(`Negocio eliminado: ${id}`);
     return { deleted: true };
+  }
+
+  /**
+   * Marca el negocio como verificado on-chain y en BD.
+   * Solo admins pueden llamar este método.
+   * La tx on-chain va primero; si falla, la BD no se toca.
+   */
+  async verify(id: string, userId: string, role: string): Promise<BusinessResponseDto> {
+    if (role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Solo administradores pueden verificar negocios');
+    }
+
+    const b = await this.findBusinessOrFail(id);
+
+    // Primero verificamos on-chain; si lanza excepción, la BD no cambia
+    const solanaTxVerify = await this.solana.verificarNegocio(b.walletAddress);
+
+    b.isVerified = true;
+    b.solanaTxVerify = solanaTxVerify;
+    const saved = await this.repo.save(b);
+
+    this.logger.log(
+      `Negocio verificado: ${id} | tx: ${solanaTxVerify}`,
+    );
+    return this.toResponse(saved);
   }
 }

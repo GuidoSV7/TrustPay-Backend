@@ -43,6 +43,15 @@ export class Business {
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
+  @Column({ name: 'is_verified', default: false })
+  isVerified: boolean;
+
+  @Column({ name: 'solana_tx_register', type: 'varchar', length: 100, nullable: true })
+  solanaTxRegister: string | null;
+
+  @Column({ name: 'solana_tx_verify', type: 'varchar', length: 100, nullable: true })
+  solanaTxVerify: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

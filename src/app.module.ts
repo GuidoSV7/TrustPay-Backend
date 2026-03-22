@@ -14,6 +14,7 @@ import { ClientSecretGuard } from './auth/guards/client-secret.guard';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { BusinessesModule } from './businesses/businesses.module';
+import { SolanaModule } from './solana/solana.module';
 import { QrCodesModule } from './qr-codes/qr-codes.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -29,6 +30,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     }),
     TypeOrmModule.forFeature([User]),
     BusinessesModule,
+    SolanaModule,
     QrCodesModule,
     ApiKeysModule,
     WebhooksModule,

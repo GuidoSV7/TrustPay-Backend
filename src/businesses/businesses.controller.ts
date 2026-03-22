@@ -16,21 +16,29 @@ import { paginationSchema } from '../common/schemas/pagination.schema';
 import { createBusinessSchema } from './schemas/create-business.schema';
 import { updateBusinessSchema } from './schemas/update-business.schema';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 
 @Controller('businesses')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class BusinessesController {
   constructor(private readonly svc: BusinessesService) {}
 
   @Post()
-  create(@CurrentUser() user: User, @Body(new ZodValidationPipe(createBusinessSchema)) dto: z.infer<typeof createBusinessSchema>) {
+  create(
+    @CurrentUser() user: User,
+    @Body(new ZodValidationPipe(createBusinessSchema)) dto: z.infer<typeof createBusinessSchema>,
+  ) {
     return this.svc.create(user.id, dto);
   }
 
   @Get()
-  findAll(@CurrentUser() user: User, @Query(new ZodValidationPipe(paginationSchema)) pagination: z.infer<typeof paginationSchema>) {
+  findAll(
+    @CurrentUser() user: User,
+    @Query(new ZodValidationPipe(paginationSchema)) pagination: z.infer<typeof paginationSchema>,
+  ) {
     return this.svc.findAllForUser(user.id, user.role, pagination);
   }
 
@@ -51,5 +59,12 @@ export class BusinessesController {
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: User) {
     return this.svc.remove(id, user.id, user.role);
+  }
+
+  /** Solo admins: verifica el negocio on-chain y espeja el estado en BD */
+  @Post(':id/verify')
+  @Roles(UserRole.ADMIN)
+  verify(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.svc.verify(id, user.id, user.role);
   }
 }
