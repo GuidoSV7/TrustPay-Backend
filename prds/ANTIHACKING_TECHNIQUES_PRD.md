@@ -66,7 +66,7 @@ Validar el código TOTP en servidor **antes** de emitir cualquier token. La fuen
 ### 4.2 Respuestas 403 en lugar de 500 en control de acceso (VULN-02 / IDOR)
 
 **Problema:**  
-En `GET /users/:id`, `PATCH /users/:id` y `DELETE /users/:id`, ante falta de autorización se usaba `throw new Error('No autorizado')`. Nest lo convierte en 500, lo que puede revelar detalles internos y difumina la causa real (acceso prohibido).
+En rutas de usuario (hoy `GET/PATCH/DELETE /users/me`), ante falta de autorización no debe usarse `throw new Error('No autorizado')`: Nest lo convierte en 500. Usar `ForbiddenException` (403) cuando aplique lógica de negocio de acceso.
 
 **Técnica:**  
 Usar excepciones HTTP apropiadas: `ForbiddenException` (403) para “no autorizado” en lógica de negocio. Así se evita confundir con fallos de servidor y se da una señal clara al cliente.
@@ -75,12 +75,12 @@ Usar excepciones HTTP apropiadas: `ForbiddenException` (403) para “no autoriza
 
 | Ruta | Condición de denegación | Cambio |
 |------|-------------------------|--------|
-| `GET /users/:id` | `currentUser.id !== id && currentUser.role !== UserRole.ADMIN` | `throw new ForbiddenException('No autorizado')` |
-| `PATCH /users/:id` | Misma condición | `throw new ForbiddenException('No autorizado')` |
-| `DELETE /users/:id` | `currentUser.id !== id` | `throw new ForbiddenException('No autorizado')` |
+| `GET /users/me` | Sin JWT válido | 401 vía `JwtAuthGuard` |
+| `PATCH /users/me` | Sin JWT válido | 401 vía `JwtAuthGuard` |
+| `DELETE /users/me` | Sin JWT o contraseña incorrecta | 401 / lógica en servicio |
 
 **Archivos:**  
-`backend/src/users/users.controller.ts` (importar `ForbiddenException` de `@nestjs/common`).
+`backend/src/users/controllers/user-profile.controller.ts` (guards JWT; errores HTTP explícitos en servicio donde corresponda).
 
 ---
 
@@ -200,7 +200,7 @@ Sustituir `stock` por `hasStock: boolean` en DTOs públicos y mapeos para no rev
 
 ### Backend
 - `src/auth/auth.module.ts`, `auth.service.ts`, `auth.controller.ts`
-- `src/users/users.controller.ts`
+- `src/users/controllers/user-profile.controller.ts`, `src/users/controllers/admin-users.controller.ts`
 - `src/app.module.ts`
 - `src/google-authenticator/google-authenticator.controller.ts`
 - `src/system-config/system-config.service.ts`

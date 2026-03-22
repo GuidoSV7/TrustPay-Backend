@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
-import { User } from './entities/user.entity';
+import { User, UserRole } from './entities/user.entity';
 import { UserProfileDto } from './dto/user-profile.dto';
 import { CompleteUserDto } from './dto/complete-user.dto';
 import type { UpdateUserDto } from './schemas/update-user.schema';
@@ -40,16 +40,19 @@ export class UsersService {
     pagination: PaginationDto,
     search?: string,
     includeInactive = true,
+    role?: UserRole,
   ): Promise<PaginatedResponse<CompleteUserDto>> {
     const { page, limit, skip } = getPaginationParams(pagination);
     const isActiveFilter = includeInactive ? {} : { isActive: true };
+    const roleFilter = role ? { role } : {};
+    const baseWhere = { ...isActiveFilter, ...roleFilter };
     const [users, total] = await this.userRepository.findAndCount({
       where: search
         ? [
-            { fullName: ILike(`%${search}%`), ...isActiveFilter },
-            { email: ILike(`%${search}%`), ...isActiveFilter },
+            { fullName: ILike(`%${search}%`), ...baseWhere },
+            { email: ILike(`%${search}%`), ...baseWhere },
           ]
-        : isActiveFilter,
+        : baseWhere,
       order: { createdAt: 'DESC' },
       skip,
       take: limit,

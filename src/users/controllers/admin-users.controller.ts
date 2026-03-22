@@ -15,7 +15,7 @@ import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { UserRole } from '../entities/user.entity';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
-import { paginationSchema } from '../../common/schemas/pagination.schema';
+import { userListQuerySchema } from '../schemas/user-list-query.schema';
 import { updateUserAdminSchema } from '../schemas/update-user-admin.schema';
 
 @Controller('admin/users')
@@ -26,10 +26,11 @@ export class AdminUsersController {
 
   @Get()
   findAll(
-    @Query(new ZodValidationPipe(paginationSchema)) pagination: z.infer<typeof paginationSchema>,
-    @Query('search') search?: string,
+    @Query(new ZodValidationPipe(userListQuerySchema))
+    query: z.infer<typeof userListQuerySchema>,
   ) {
-    return this.usersService.findAllComplete(pagination, search);
+    const { search, role, ...pagination } = query;
+    return this.usersService.findAllComplete(pagination, search, true, role);
   }
 
   @Get(':id')
