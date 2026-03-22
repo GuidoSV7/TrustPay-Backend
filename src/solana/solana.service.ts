@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleInit,
   InternalServerErrorException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -79,7 +80,14 @@ export class SolanaService implements OnModuleInit {
     businessId: string,
     ownerWallet: string,
   ): Promise<string> {
-    const owner = new PublicKey(ownerWallet);
+    let owner: PublicKey;
+    try {
+      owner = new PublicKey(ownerWallet);
+    } catch {
+      throw new BadRequestException(
+        `walletAddress inválido: "${ownerWallet}" no es una pubkey Solana`,
+      );
+    }
     const [businessPda] = this.getBusinessPda(owner);
     const discriminator = this.ixDiscriminator('registrar_negocio');
 

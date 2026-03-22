@@ -41,6 +41,9 @@ export class ApiKeysService {
     if (role !== UserRole.ADMIN && b.userId !== userId) {
       throw new ForbiddenException('No autorizado');
     }
+    if (!b.isActive && role !== UserRole.ADMIN) {
+      throw new BadRequestException('El negocio está desactivado');
+    }
     return b;
   }
 

@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -43,6 +44,9 @@ export class QrCodesService {
     if (!b) throw new NotFoundException('Negocio no encontrado');
     if (role !== UserRole.ADMIN && b.userId !== userId) {
       throw new ForbiddenException('No autorizado');
+    }
+    if (!b.isActive && role !== UserRole.ADMIN) {
+      throw new BadRequestException('El negocio está desactivado');
     }
     return b;
   }

@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -79,7 +80,9 @@ export class BusinessesService {
       .skip(skip)
       .take(limit);
     if (role !== UserRole.ADMIN) {
-      qb.where('b.userId = :userId', { userId });
+      qb.where('b.userId = :userId', { userId }).andWhere('b.isActive = :active', {
+        active: true,
+      });
     }
     const [items, total] = await qb.getManyAndCount();
     const data = items.map((b) => this.toResponse(b));
@@ -104,19 +107,42 @@ export class BusinessesService {
     if (role !== UserRole.ADMIN && b.userId !== userId) {
       throw new ForbiddenException('No autorizado');
     }
-    Object.assign(b, dto);
+
+    if (dto.isActive !== undefined && role !== UserRole.ADMIN) {
+      throw new ForbiddenException(
+        'Solo administradores pueden cambiar el estado activo del negocio',
+      );
+    }
+
+    if (!b.isActive && role !== UserRole.ADMIN) {
+      throw new BadRequestException(
+        'El negocio está desactivado. Contacta al administrador si necesitás reactivarlo.',
+      );
+    }
+
+    const { isActive, ...rest } = dto;
+    Object.assign(b, rest);
+    if (isActive !== undefined) {
+      b.isActive = isActive;
+    }
+
     const saved = await this.repo.save(b);
     return this.toResponse(saved);
   }
 
-  async remove(id: string, userId: string, role: string) {
+  /** Soft delete: marca isActive = false (no borra fila ni datos on-chain). */
+  async remove(id: string, userId: string, role: string): Promise<BusinessResponseDto> {
     const b = await this.findBusinessOrFail(id);
     if (role !== UserRole.ADMIN && b.userId !== userId) {
       throw new ForbiddenException('No autorizado');
     }
-    await this.repo.remove(b);
-    this.logger.log(`Negocio eliminado: ${id}`);
-    return { deleted: true };
+    if (!b.isActive) {
+      return this.toResponse(b);
+    }
+    b.isActive = false;
+    const saved = await this.repo.save(b);
+    this.logger.log(`Negocio desactivado (soft delete): ${id}`);
+    return this.toResponse(saved);
   }
 
   /**
