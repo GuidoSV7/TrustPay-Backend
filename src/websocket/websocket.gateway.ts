@@ -13,10 +13,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserRole } from '../users/entities/user.entity';
 import { WebSocketService } from './websocket.service';
+import { parseCorsOrigins } from '../config/cors.util';
 
 @WebSocketGateway({
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    origin: parseCorsOrigins(process.env.CORS_ORIGIN),
     credentials: true,
   },
   namespace: '/live-users',

@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import { join } from 'path';
 import { ThrottlerExceptionFilter } from './common/filters/throttler-exception.filter';
+import { parseCorsOrigins } from './config/cors.util';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -16,7 +17,7 @@ async function bootstrap() {
   // No se usa ValidationPipe global
 
   app.enableCors({
-    origin: configService.get<string>('CORS_ORIGIN') || 'http://localhost:3000',
+    origin: parseCorsOrigins(configService.get<string>('CORS_ORIGIN')),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
