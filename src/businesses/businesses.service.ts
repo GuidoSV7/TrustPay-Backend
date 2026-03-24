@@ -13,6 +13,7 @@ import type { CreateBusinessDto } from './schemas/create-business.schema';
 import type { UpdateBusinessDto } from './schemas/update-business.schema';
 import { BusinessResponseDto } from './dto/business-response.dto';
 import { UserRole } from '../users/entities/user.entity';
+import { ApiKey } from '../api-keys/entities/api-key.entity';
 import {
   PaginationDto,
   getPaginationParams,
@@ -95,6 +96,47 @@ export class BusinessesService {
       throw new ForbiddenException('No autorizado');
     }
     return this.toResponse(b);
+  }
+
+  /**
+   * API pública (x-api-key / x-secret-key): negocios visibles para la clave.
+   * Clave por negocio → un solo ítem; credencial general de cuenta → todos los negocios activos.
+   */
+  async findForApiKey(apiKey: ApiKey): Promise<{ data: BusinessResponseDto[] }> {
+    if (apiKey.businessId) {
+      const b = await this.repo.findOne({ where: { id: apiKey.businessId } });
+      if (!b) throw new NotFoundException('Negocio no encontrado');
+      return { data: [this.toResponse(b)] };
+    }
+    if (apiKey.userId) {
+      const items = await this.repo.find({
+        where: { userId: apiKey.userId, isActive: true },
+        order: { createdAt: 'DESC' },
+      });
+      return { data: items.map((x) => this.toResponse(x)) };
+    }
+    throw new ForbiddenException('API key inválida');
+  }
+
+  /** Un negocio por id; autorizado si la clave es de ese negocio o de la cuenta dueña. */
+  async findOneForApiKey(
+    apiKey: ApiKey,
+    businessId: string,
+  ): Promise<BusinessResponseDto> {
+    const b = await this.findBusinessOrFail(businessId);
+    if (apiKey.businessId) {
+      if (apiKey.businessId !== businessId) {
+        throw new ForbiddenException('No autorizado');
+      }
+      return this.toResponse(b);
+    }
+    if (apiKey.userId) {
+      if (b.userId !== apiKey.userId) {
+        throw new ForbiddenException('No autorizado');
+      }
+      return this.toResponse(b);
+    }
+    throw new ForbiddenException('API key inválida');
   }
 
   async update(

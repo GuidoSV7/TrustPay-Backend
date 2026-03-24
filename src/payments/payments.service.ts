@@ -68,6 +68,14 @@ export class PaymentsService {
     );
   }
 
+  /** URL del frontend (página de confirmación del comprador). */
+  private getFrontendPublicUrl(): string {
+    return (
+      this.config.get<string>('FRONTEND_PUBLIC_URL')?.replace(/\/$/, '') ??
+      'http://localhost:3000'
+    );
+  }
+
   private async assertBusinessAccess(
     businessId: string,
     userId: string,
@@ -181,6 +189,8 @@ export class PaymentsService {
     status: string;
     solanaPayUrl: string;
     qrImageBase64: string;
+    /** Enlace para que el comprador confirme recepción (liberar escrow) en el frontend TrustPay. */
+    buyerConfirmUrl: string;
     expiresAt: Date;
     createdAt: Date;
   }> {
@@ -258,6 +268,8 @@ export class PaymentsService {
       `Payment creado: ${saved.id} | txId: ${transactionId} | business: ${businessId} | baseLamports=${baseLamports} feeLamports=${feeLamports}`,
     );
 
+    const buyerConfirmUrl = `${this.getFrontendPublicUrl()}/pago/${saved.id}/confirmar`;
+
     return {
       paymentId: saved.id,
       transactionId,
@@ -272,6 +284,7 @@ export class PaymentsService {
       status: saved.status,
       solanaPayUrl: saved.solanaPayUrl,
       qrImageBase64: saved.qrImageUrl ?? '',
+      buyerConfirmUrl,
       expiresAt: saved.expiresAt!,
       createdAt: saved.createdAt,
     };
@@ -646,13 +659,28 @@ export class PaymentsService {
     };
   }
 
-  /** Solo status para polling público del comprador */
-  async getPublicStatus(paymentId: string): Promise<{ status: string }> {
+  /**
+   * Polling público del comprador. Incluye datos mínimos para la página de confirmar recepción.
+   * Quien tenga el UUID del pago ya puede consultar; no expone montos sensibles extra.
+   */
+  async getPublicStatus(paymentId: string): Promise<{
+    status: string;
+    buyerWallet: string | null;
+    orderId: string | null;
+    description: string | null;
+    businessName: string | null;
+  }> {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
-      select: ['status'],
+      relations: ['business'],
     });
     if (!payment) throw new NotFoundException('Pago no encontrado');
-    return { status: payment.status };
+    return {
+      status: payment.status,
+      buyerWallet: payment.buyerWallet,
+      orderId: payment.orderId,
+      description: payment.description,
+      businessName: payment.business?.name ?? null,
+    };
   }
 }

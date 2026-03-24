@@ -7,6 +7,7 @@ import { ApiKeysService } from './api-keys.service';
 import { ApiKeysController } from './api-keys.controller';
 import { AdminApiKeysController } from './admin-api-keys.controller';
 import { MerchantApiCredentialsController } from './merchant-api-credentials.controller';
+import { ApiKeyAuthGuard } from './guards/api-key-auth.guard';
 
 @Module({
   imports: [TypeOrmModule.forFeature([ApiKey, Business, User])],
@@ -15,7 +16,7 @@ import { MerchantApiCredentialsController } from './merchant-api-credentials.con
     AdminApiKeysController,
     MerchantApiCredentialsController,
   ],
-  providers: [ApiKeysService],
-  exports: [ApiKeysService],
+  providers: [ApiKeysService, ApiKeyAuthGuard],
+  exports: [ApiKeysService, ApiKeyAuthGuard],
 })
 export class ApiKeysModule {}
