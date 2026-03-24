@@ -61,9 +61,9 @@ export class BusinessesController {
     return this.svc.remove(id, user.id, user.role);
   }
 
-  /** Solo admins: verifica el negocio on-chain y espeja el estado en BD */
+  /** Verifica on-chain + BD. Admin (cualquier negocio) o merchant (solo el suyo). */
   @Post(':id/verify')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MERCHANT)
   verify(@Param('id') id: string, @CurrentUser() user: User) {
     return this.svc.verify(id, user.id, user.role);
   }

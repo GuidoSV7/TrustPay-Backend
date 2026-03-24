@@ -44,8 +44,13 @@ export class Payment {
   @Column({ name: 'seller_wallet', type: 'varchar', length: 255 })
   sellerWallet: string;
 
+  /** Monto en escrow (lo que recibe el vendedor al liberar). */
   @Column({ name: 'amount_lamports', type: 'bigint' })
   amountLamports: string;
+
+  /** Comisión TrustPay en lamports (transferida aparte al pagar; no entra al escrow). */
+  @Column({ name: 'commission_lamports', type: 'bigint', nullable: true })
+  commissionLamports: string | null;
 
   @Column({ name: 'token_mint', type: 'varchar', length: 255, nullable: true })
   tokenMint: string | null;

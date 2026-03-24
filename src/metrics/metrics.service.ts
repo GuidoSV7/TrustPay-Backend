@@ -103,6 +103,15 @@ export type MerchantPaymentFunnelStep = {
 
 export type MerchantPaymentFunnelResponse = {
   steps: MerchantPaymentFunnelStep[];
+  /** Conteos por estado en DB (mismos filtros que el embudo: sin refunded/expired). */
+  countsByStatus: {
+    pending: number;
+    escrow_locked: number;
+    disputed: number;
+    shipped: number;
+    released: number;
+    auto_released: number;
+  };
 };
 
 @Injectable()
@@ -327,7 +336,17 @@ export class MetricsService {
       },
     ];
 
-    return { steps };
+    return {
+      steps,
+      countsByStatus: {
+        pending,
+        escrow_locked: escrowLocked,
+        disputed,
+        shipped,
+        released,
+        auto_released: autoReleased,
+      },
+    };
   }
 
   /**

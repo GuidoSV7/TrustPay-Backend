@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { Business } from '../../businesses/entities/business.entity';
+import { ApiKey } from '../../api-keys/entities/api-key.entity';
 
 export enum UserRole {
   ADMIN = 'admin',
@@ -52,4 +53,7 @@ export class User {
 
   @OneToMany(() => Business, (b) => b.user)
   businesses: Business[];
+
+  @OneToMany(() => ApiKey, (k) => k.user)
+  apiKeys: ApiKey[];
 }

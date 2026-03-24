@@ -20,7 +20,11 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 import { ApiKey } from '../api-keys/entities/api-key.entity';
 
-@Controller('payments')
+/**
+ * API pública de pagos para integradores (prefijo /api/payments).
+ * Negocios, auth, métricas y webhooks (config) viven en el producto TrustPay, no en esta guía.
+ */
+@Controller('api/payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
@@ -29,12 +33,16 @@ export class PaymentsController {
    */
   @Post('qr')
   @UseGuards(ApiKeyAuthGuard)
-  createWithApiKey(
+  async createWithApiKey(
     @ApiKeyBusiness() apiKey: ApiKey,
     @Body(new ZodValidationPipe(createPaymentQrSchema))
     dto: z.infer<typeof createPaymentQrSchema>,
   ) {
-    return this.paymentsService.createPaymentQr(apiKey.businessId, dto);
+    const businessId = await this.paymentsService.resolveBusinessIdForApiKey(
+      apiKey,
+      dto,
+    );
+    return this.paymentsService.createPaymentQr(businessId, dto);
   }
 
   /**
@@ -47,7 +55,7 @@ export class PaymentsController {
     @Param('paymentId') paymentId: string,
     @Body(new ZodValidationPipe(shipPaymentSchema)) dto: z.infer<typeof shipPaymentSchema>,
   ) {
-    return this.paymentsService.shipPayment(paymentId, apiKey.businessId, dto);
+    return this.paymentsService.shipPaymentForApiKey(paymentId, apiKey, dto);
   }
 
   /**
@@ -69,7 +77,7 @@ export class PaymentsController {
     @ApiKeyBusiness() apiKey: ApiKey,
     @Param('paymentId') paymentId: string,
   ) {
-    return this.paymentsService.getPaymentStatus(paymentId, apiKey.businessId);
+    return this.paymentsService.getPaymentStatusForApiKey(paymentId, apiKey);
   }
 
   /**

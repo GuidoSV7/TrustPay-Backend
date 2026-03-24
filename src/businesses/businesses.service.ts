@@ -108,22 +108,25 @@ export class BusinessesService {
       throw new ForbiddenException('No autorizado');
     }
 
-    if (dto.isActive !== undefined && role !== UserRole.ADMIN) {
-      throw new ForbiddenException(
-        'Solo administradores pueden cambiar el estado activo del negocio',
-      );
-    }
-
     if (!b.isActive && role !== UserRole.ADMIN) {
       throw new BadRequestException(
         'El negocio está desactivado. Contacta al administrador si necesitás reactivarlo.',
       );
     }
 
-    const { isActive, ...rest } = dto;
-    Object.assign(b, rest);
-    if (isActive !== undefined) {
-      b.isActive = isActive;
+    // Solo tocamos campos presentes en el DTO (evita borrar logoUrl con null/undefined por PATCH parcial).
+    if (dto.name !== undefined) b.name = dto.name;
+    if (dto.description !== undefined) b.description = dto.description;
+    if (dto.category !== undefined) b.category = dto.category;
+    if (dto.logoUrl !== undefined) b.logoUrl = dto.logoUrl;
+    if (dto.walletAddress !== undefined) b.walletAddress = dto.walletAddress;
+    if (dto.isActive !== undefined) {
+      if (role !== UserRole.ADMIN) {
+        throw new ForbiddenException(
+          'Solo administradores pueden cambiar el estado activo del negocio',
+        );
+      }
+      b.isActive = dto.isActive;
     }
 
     const saved = await this.repo.save(b);
@@ -147,17 +150,28 @@ export class BusinessesService {
 
   /**
    * Marca el negocio como verificado on-chain y en BD.
-   * Solo admins pueden llamar este método.
+   * Admin: cualquier negocio. Merchant: solo negocios propios.
    * La tx on-chain va primero; si falla, la BD no se toca.
    */
   async verify(id: string, userId: string, role: string): Promise<BusinessResponseDto> {
-    if (role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Solo administradores pueden verificar negocios');
-    }
-
     const b = await this.findBusinessOrFail(id);
 
-    // Primero verificamos on-chain; si lanza excepción, la BD no cambia
+    if (role === UserRole.ADMIN) {
+      // ok
+    } else if (role === UserRole.MERCHANT) {
+      if (b.userId !== userId) {
+        throw new ForbiddenException('No autorizado');
+      }
+    } else {
+      throw new ForbiddenException(
+        'Solo el comercio dueño o un administrador puede verificar el negocio',
+      );
+    }
+
+    if (b.isVerified) {
+      return this.toResponse(b);
+    }
+
     const solanaTxVerify = await this.solana.verificarNegocio(
       b.walletAddress,
       b.id,
@@ -167,9 +181,7 @@ export class BusinessesService {
     b.solanaTxVerify = solanaTxVerify;
     const saved = await this.repo.save(b);
 
-    this.logger.log(
-      `Negocio verificado: ${id} | tx: ${solanaTxVerify}`,
-    );
+    this.logger.log(`Negocio verificado: ${id} | tx: ${solanaTxVerify}`);
     return this.toResponse(saved);
   }
 }

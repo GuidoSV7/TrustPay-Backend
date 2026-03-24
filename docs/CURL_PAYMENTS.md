@@ -44,7 +44,7 @@ Guarda `publishableKey` (pk_xxx) y `secretKey` (sk_xxx). El secretKey solo se mu
 ```bash
 # Sustituye TU_PK y TU_SK por tu publishableKey y secretKey
 # Sustituye SELLER_WALLET por la wallet del vendedor (ej: tu wallet de Phantom devnet)
-curl -X POST http://localhost:3001/payments/qr \
+curl -X POST http://localhost:3001/api/payments/qr \
   -H "Content-Type: application/json" \
   -H "x-api-key: pk_devnet_XXXXXXXX" \
   -H "x-secret-key: sk_devnet_YYYYYYYY" \
@@ -98,7 +98,7 @@ curl -X POST http://localhost:3001/tx/PAYMENT_ID \
 
 ```bash
 # Con API Key (merchant)
-curl "http://localhost:3001/payments/PAYMENT_ID" \
+curl "http://localhost:3001/api/payments/PAYMENT_ID" \
   -H "x-api-key: pk_devnet_XXXXXXXX" \
   -H "x-secret-key: sk_devnet_YYYYYYYY"
 
@@ -112,7 +112,7 @@ curl "http://localhost:3001/payments/PAYMENT_ID/status"
 
 ```bash
 # Con API Key
-curl -X POST "http://localhost:3001/payments/PAYMENT_ID/ship" \
+curl -X POST "http://localhost:3001/api/payments/PAYMENT_ID/ship" \
   -H "Content-Type: application/json" \
   -H "x-api-key: pk_devnet_XXXXXXXX" \
   -H "x-secret-key: sk_devnet_YYYYYYYY" \
@@ -133,7 +133,7 @@ Público. El comprador es cualquier persona con Phantom; no requiere registro.
 El `account` debe coincidir con la wallet que pagó (buyerWallet del pago).
 
 ```bash
-curl -X POST "http://localhost:3001/payments/PAYMENT_ID/confirm" \
+curl -X POST "http://localhost:3001/api/payments/PAYMENT_ID/confirm" \
   -H "Content-Type: application/json" \
   -d '{"account":"WALLET_DEL_COMPRADOR_BASE58"}'
 ```
@@ -144,9 +144,9 @@ Devuelve `{ transaction: "base64...", message: "..." }` — el frontend deserial
 
 ## Flujo de prueba completo
 
-1. Crea un pago: `POST /payments/qr` o `POST /businesses/:id/payments/qr`
+1. Crea un pago: `POST /api/payments/qr` o `POST /businesses/:id/payments/qr`
 2. Escanea el QR con Phantom (devnet) o simula: `GET /tx/:id` y `POST /tx/:id`
 3. Phantom firma — el cron detecta el escrow en ~30s → `escrow_locked`
-4. Marca enviado: `POST /payments/:id/ship`
-5. El comprador (cualquiera con Phantom) llama `POST /payments/:id/confirm` con `{ account: "wallet" }` → obtiene tx para firmar con Phantom
+4. Marca enviado: `POST /api/payments/:id/ship`
+5. El comprador (cualquiera con Phantom) llama `POST /api/payments/:id/confirm` con `{ account: "wallet" }` → obtiene tx para firmar con Phantom
 6. Tras firmar y enviar la tx, el cron detecta la liberación → `released`

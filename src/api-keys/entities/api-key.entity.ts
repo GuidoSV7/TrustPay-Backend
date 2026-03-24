@@ -7,18 +7,28 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Business } from '../../businesses/entities/business.entity';
+import { User } from '../../users/entities/user.entity';
 
 @Entity('api_keys')
 export class ApiKey {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'business_id', type: 'uuid' })
-  businessId: string;
+  /** Clave ligada a un negocio (legacy) o null si es credencial general de cuenta. */
+  @Column({ name: 'business_id', type: 'uuid', nullable: true })
+  businessId: string | null;
 
-  @ManyToOne(() => Business, (b) => b.apiKeys, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, (b) => b.apiKeys, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'business_id' })
-  business: Business;
+  business: Business | null;
+
+  /** Credencial general del comercio: aplica a todos sus negocios (mismas pk/sk). */
+  @Column({ name: 'user_id', type: 'uuid', nullable: true })
+  userId: string | null;
+
+  @ManyToOne(() => User, (u) => u.apiKeys, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'user_id' })
+  user: User | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   name: string | null;

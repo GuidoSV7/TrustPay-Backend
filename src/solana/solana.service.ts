@@ -16,7 +16,6 @@ import {
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import * as crypto from 'crypto';
-import * as borsh from '@coral-xyz/borsh';
 
 @Injectable()
 export class SolanaService implements OnModuleInit {
@@ -44,14 +43,12 @@ export class SolanaService implements OnModuleInit {
     );
   }
 
-  /** Conexión RPC (Solana Pay, polling de pagos, etc.). */
   getConnection(): Connection {
     return this.connection;
   }
 
   // ─── helpers ──────────────────────────────────────────────────────────────
 
-  /** Calcula el discriminador de instrucción: sha256("global:<name>")[0..8] */
   private ixDiscriminator(name: string): Buffer {
     return Buffer.from(
       crypto.createHash('sha256').update(`global:${name}`).digest(),
@@ -59,25 +56,17 @@ export class SolanaService implements OnModuleInit {
   }
 
   /**
-   * Deriva la Business PDA: seeds = ["business", owner, sha256(utf8(business_id))].
-   * Debe coincidir con `hash(business_id.as_bytes())` del programa Anchor.
-   * Así cada negocio (UUID) tiene su propia cuenta aunque la wallet sea la misma.
+   * Deriva la Business PDA: seeds = ["business", owner]
+   * Coincide exactamente con el contrato:
+   * seeds = [b"business", owner.key().as_ref()]
    */
-  private getBusinessPda(
-    ownerPubkey: PublicKey,
-    businessId: string,
-  ): [PublicKey, number] {
-    const digest = crypto
-      .createHash('sha256')
-      .update(businessId, 'utf8')
-      .digest();
+  private getBusinessPda(ownerPubkey: PublicKey): [PublicKey, number] {
     return PublicKey.findProgramAddressSync(
-      [Buffer.from('business'), ownerPubkey.toBuffer(), digest],
+      [Buffer.from('business'), ownerPubkey.toBuffer()],
       this.programId,
     );
   }
 
-  /** Serializa un String en formato Borsh (u32 LE length prefix + bytes) */
   private encodeString(value: string): Buffer {
     const encoded = Buffer.from(value, 'utf8');
     const len = Buffer.alloc(4);
@@ -90,7 +79,6 @@ export class SolanaService implements OnModuleInit {
   /**
    * Registra un negocio on-chain creando la Business PDA.
    * El backend (authority) paga la cuenta; el merchant no necesita firmar.
-   * @returns firma de la transacción confirmada
    */
   async registrarNegocio(
     businessId: string,
@@ -104,10 +92,10 @@ export class SolanaService implements OnModuleInit {
         `walletAddress inválido: "${ownerWallet}" no es una pubkey Solana`,
       );
     }
-    const [businessPda] = this.getBusinessPda(owner, businessId);
-    const discriminator = this.ixDiscriminator('registrar_negocio');
 
-    // data = discriminator (8 bytes) + borsh string business_id
+    // ✅ Sin hash del businessId — solo ["business", owner]
+    const [businessPda] = this.getBusinessPda(owner);
+    const discriminator = this.ixDiscriminator('registrar_negocio');
     const data = Buffer.concat([discriminator, this.encodeString(businessId)]);
 
     const ix = new TransactionInstruction({
@@ -144,20 +132,20 @@ export class SolanaService implements OnModuleInit {
   /**
    * Verifica un negocio on-chain (is_verified = true).
    * Solo la authority de TrustPay puede ejecutar esta instrucción.
-   * @returns firma de la transacción confirmada
+   * El contrato NO recibe argumentos — solo cuentas.
    */
   async verificarNegocio(
     ownerWallet: string,
     businessId: string,
   ): Promise<string> {
     const owner = new PublicKey(ownerWallet);
-    const [businessPda] = this.getBusinessPda(owner, businessId);
+
+    // ✅ Sin hash del businessId — solo ["business", owner]
+    const [businessPda] = this.getBusinessPda(owner);
     const discriminator = this.ixDiscriminator('verificar_negocio');
 
-    const data = Buffer.concat([
-      discriminator,
-      this.encodeString(businessId),
-    ]);
+    // ✅ Sin argumentos — el contrato verificar_negocio no recibe parámetros
+    const data = discriminator;
 
     const ix = new TransactionInstruction({
       programId: this.programId,
@@ -192,10 +180,6 @@ export class SolanaService implements OnModuleInit {
     }
   }
 
-  /**
-   * PostgreSQL con columna `uuid` devuelve el id con guiones (36 bytes) aunque guardemos 32 hex.
-   * Anchor/contrato usan transaction_id.as_bytes() con seed ≤ 32 bytes: UUID sin guiones.
-   */
   private normalizeTransactionIdForEscrow(raw: string): string {
     const t = raw.trim();
     const noHyphens = t.replace(/-/g, '');
@@ -211,10 +195,6 @@ export class SolanaService implements OnModuleInit {
     );
   }
 
-  /**
-   * Deriva la Escrow PDA según seeds del contrato: ["escrow", buyer, transaction_id.as_bytes()]
-   * Cada seed ≤ 32 bytes (Solana).
-   */
   getEscrowPda(buyerPubkey: PublicKey, transactionId: string): [PublicKey, number] {
     const normalized = this.normalizeTransactionIdForEscrow(transactionId);
     const seedTx = Buffer.from(normalized, 'utf8');
@@ -224,13 +204,6 @@ export class SolanaService implements OnModuleInit {
     );
   }
 
-  /**
-   * Construye la instrucción crear_escrow para que el buyer la firme.
-   * El backend NO firma; Phantom firma con la wallet del buyer.
-   *
-   * Antes de serializar, el llamador debe asignar `feePayer` (buyer) y
-   * `recentBlockhash` vía `connection.getLatestBlockhash()`.
-   */
   buildCrearEscrowTransaction(
     buyerWallet: PublicKey,
     sellerWallet: PublicKey,
@@ -241,7 +214,6 @@ export class SolanaService implements OnModuleInit {
     const [escrowPda] = this.getEscrowPda(buyerWallet, normalized);
     const discriminator = this.ixDiscriminator('crear_escrow');
 
-    // Borsh: u32 length + string bytes para transactionId, u64 LE para amount (mismo string que seeds)
     const txIdEncoded = this.encodeString(normalized);
     const amountBuf = Buffer.alloc(8);
     amountBuf.writeBigUInt64LE(amountLamports);
@@ -261,10 +233,6 @@ export class SolanaService implements OnModuleInit {
     return new Transaction().add(ix);
   }
 
-  /**
-   * Construye y envía liberar_escrow. El buyer debe firmar.
-   * Requiere: buyer, seller, escrow con transaction_id para derivar la PDA.
-   */
   buildLiberarEscrowTransaction(
     buyerWallet: PublicKey,
     sellerWallet: PublicKey,
@@ -287,15 +255,15 @@ export class SolanaService implements OnModuleInit {
     return new Transaction().add(ix);
   }
 
-  /** Obtiene el programId para uso externo (p.ej. fetch de cuentas) */
   getProgramId(): PublicKey {
     return this.programId;
   }
 
-  /**
-   * Verifica si la Escrow PDA existe y está en estado LOCKED (1).
-   * Usado por el cron para detectar pagos confirmados.
-   */
+  /** Wallet de la authority TrustPay (misma que firma verificar negocio). Sirve como destino de comisiones si no hay PLATFORM_FEE_WALLET. */
+  getAuthorityPublicKey(): PublicKey {
+    return this.authority.publicKey;
+  }
+
   async isEscrowLocked(
     buyerWallet: PublicKey,
     transactionId: string,
@@ -307,15 +275,12 @@ export class SolanaService implements OnModuleInit {
         return false;
       }
       const status = accountInfo.data.readUInt8(80);
-      return status === 1; // ESCROW_LOCKED
+      return status === 1;
     } catch {
       return false;
     }
   }
 
-  /**
-   * Verifica si la Escrow PDA está en estado RELEASED (2).
-   */
   async isEscrowReleased(
     buyerWallet: PublicKey,
     transactionId: string,
@@ -327,7 +292,7 @@ export class SolanaService implements OnModuleInit {
         return false;
       }
       const status = accountInfo.data.readUInt8(80);
-      return status === 2; // ESCROW_RELEASED
+      return status === 2;
     } catch {
       return false;
     }

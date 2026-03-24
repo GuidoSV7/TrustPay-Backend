@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
 import { randomUUID } from 'crypto';
 import { Payment } from './entities/payment.entity';
 import { Business } from '../businesses/entities/business.entity';
@@ -18,6 +18,8 @@ import { WebhookDeliveryService } from '../webhooks/webhook-delivery.service';
 import { PaymentWebhookService } from './payment-webhook.service';
 import type { CreatePaymentQrDto } from './schemas/create-payment-qr.schema';
 import { UserRole } from '../users/entities/user.entity';
+import { ApiKey } from '../api-keys/entities/api-key.entity';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
@@ -33,7 +35,31 @@ export class PaymentsService {
     private readonly solana: SolanaService,
     private readonly webhookDelivery: WebhookDeliveryService,
     private readonly paymentWebhook: PaymentWebhookService,
+    private readonly platformSettings: PlatformSettingsService,
   ) {}
+
+  /** Monto del pedido (vendedor); el comprador paga esto + comisión en la misma tx. */
+  private computeCommissionLamports(
+    baseLamports: bigint,
+    commissionBps: number,
+  ): bigint {
+    if (commissionBps <= 0) return 0n;
+    return (baseLamports * BigInt(commissionBps)) / 10000n;
+  }
+
+  private getFeeRecipientPubkey(): PublicKey {
+    const raw = this.config.get<string>('PLATFORM_FEE_WALLET');
+    if (raw?.trim()) {
+      try {
+        return new PublicKey(raw.trim());
+      } catch {
+        this.logger.warn(
+          `PLATFORM_FEE_WALLET inválida, se usa la authority TrustPay`,
+        );
+      }
+    }
+    return this.solana.getAuthorityPublicKey();
+  }
 
   private getApiBaseUrl(): string {
     return (
@@ -58,6 +84,74 @@ export class PaymentsService {
     return b;
   }
 
+  /** Clave por negocio o credencial general (userId). */
+  assertApiKeyCanAccessPayment(apiKey: ApiKey, payment: Payment): void {
+    if (apiKey.businessId) {
+      if (payment.businessId !== apiKey.businessId) {
+        throw new ForbiddenException('No autorizado');
+      }
+      return;
+    }
+    if (apiKey.userId) {
+      const ownerId = payment.business?.userId;
+      if (!ownerId || ownerId !== apiKey.userId) {
+        throw new ForbiddenException('No autorizado');
+      }
+      return;
+    }
+    throw new ForbiddenException('API key inválida');
+  }
+
+  /**
+   * Credencial general: exige businessId en el body. Clave por negocio: usa el negocio de la clave.
+   */
+  async resolveBusinessIdForApiKey(
+    apiKey: ApiKey,
+    dto: CreatePaymentQrDto,
+  ): Promise<string> {
+    if (apiKey.businessId) {
+      return apiKey.businessId;
+    }
+    if (!apiKey.userId) {
+      throw new BadRequestException('API key inválida');
+    }
+    const bid = dto.businessId;
+    if (!bid) {
+      throw new BadRequestException(
+        'Enviá businessId en el cuerpo JSON para indicar el negocio (credenciales generales de cuenta).',
+      );
+    }
+    const b = await this.businessRepo.findOne({ where: { id: bid } });
+    if (!b || b.userId !== apiKey.userId) {
+      throw new ForbiddenException('Negocio no autorizado para esta clave');
+    }
+    return bid;
+  }
+
+  async getPaymentStatusForApiKey(paymentId: string, apiKey: ApiKey) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id: paymentId },
+      relations: ['business'],
+    });
+    if (!payment) throw new NotFoundException('Pago no encontrado');
+    this.assertApiKeyCanAccessPayment(apiKey, payment);
+    return this.getPaymentStatus(paymentId, payment.businessId);
+  }
+
+  async shipPaymentForApiKey(
+    paymentId: string,
+    apiKey: ApiKey,
+    dto: { trackingNumber?: string | null; note?: string | null },
+  ) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id: paymentId },
+      relations: ['business'],
+    });
+    if (!payment) throw new NotFoundException('Pago no encontrado');
+    this.assertApiKeyCanAccessPayment(apiKey, payment);
+    return this.shipPayment(paymentId, payment.businessId, dto);
+  }
+
   /**
    * Crea un pago con QR en modo Transaction Request (escrow).
    * Auth: API Key (businessId del key) o JWT (businessId del path).
@@ -74,8 +168,16 @@ export class PaymentsService {
     paymentId: string;
     transactionId: string;
     orderId: string | null;
+    /** Monto del pedido (vendedor / escrow), en SOL. */
     amount: number;
     amountLamports: string;
+    /** Comisión TrustPay en SOL (adicional al comprador). */
+    commissionAmount: number;
+    commissionLamports: string;
+    /** Total que paga el comprador (pedido + comisión). */
+    totalAmount: number;
+    totalLamports: string;
+    commissionBps: number;
     status: string;
     solanaPayUrl: string;
     qrImageBase64: string;
@@ -107,7 +209,12 @@ export class PaymentsService {
     // UUID sin guiones = 32 caracteres = 32 bytes (límite de seed PDA en Solana).
     // randomUUID() con guiones son 36 bytes y rompe findProgramAddress / Anchor seeds.
     const transactionId = randomUUID().replace(/-/g, '');
-    const amountLamports = BigInt(Math.floor(dto.amount * LAMPORTS_PER_SOL));
+    const commissionBps = await this.platformSettings.getCommissionBps();
+    const baseLamports = BigInt(Math.floor(dto.amount * LAMPORTS_PER_SOL));
+    const feeLamports = this.computeCommissionLamports(
+      baseLamports,
+      commissionBps,
+    );
     const expiresAt = new Date(Date.now() + dto.expiresInMinutes * 60 * 1000);
 
     const payment = this.paymentRepo.create({
@@ -115,7 +222,9 @@ export class PaymentsService {
       transactionId,
       orderId: dto.orderId,
       sellerWallet,
-      amountLamports: amountLamports.toString(),
+      amountLamports: baseLamports.toString(),
+      commissionLamports:
+        feeLamports > 0n ? feeLamports.toString() : null,
       tokenMint: null,
       webhookUrl: dto.webhookUrl,
       webhookSecret: dto.webhookSecret ?? null,
@@ -141,8 +250,12 @@ export class PaymentsService {
     savedTemp.qrImageUrl = qrImageDataUrl;
     const saved = await this.paymentRepo.save(savedTemp);
 
+    const totalLamports = baseLamports + feeLamports;
+    const feeSol = Number(feeLamports) / LAMPORTS_PER_SOL;
+    const totalSol = Number(totalLamports) / LAMPORTS_PER_SOL;
+
     this.logger.log(
-      `Payment creado: ${saved.id} | txId: ${transactionId} | business: ${businessId}`,
+      `Payment creado: ${saved.id} | txId: ${transactionId} | business: ${businessId} | baseLamports=${baseLamports} feeLamports=${feeLamports}`,
     );
 
     return {
@@ -150,7 +263,12 @@ export class PaymentsService {
       transactionId,
       orderId: saved.orderId,
       amount: dto.amount,
-      amountLamports: amountLamports.toString(),
+      amountLamports: baseLamports.toString(),
+      commissionAmount: feeSol,
+      commissionLamports: feeLamports.toString(),
+      totalAmount: totalSol,
+      totalLamports: totalLamports.toString(),
+      commissionBps,
       status: saved.status,
       solanaPayUrl: saved.solanaPayUrl,
       qrImageBase64: saved.qrImageUrl ?? '',
@@ -224,6 +342,9 @@ export class PaymentsService {
     const buyer = new PublicKey(buyerWallet.trim());
     const seller = new PublicKey(payment.sellerWallet);
     const amount = BigInt(payment.amountLamports);
+    const feeLamports = payment.commissionLamports
+      ? BigInt(payment.commissionLamports)
+      : 0n;
 
     const tx = this.solana.buildCrearEscrowTransaction(
       buyer,
@@ -231,6 +352,17 @@ export class PaymentsService {
       payment.transactionId,
       amount,
     );
+
+    if (feeLamports > 0n) {
+      const feeRecipient = this.getFeeRecipientPubkey();
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: buyer,
+          toPubkey: feeRecipient,
+          lamports: feeLamports,
+        }),
+      );
+    }
 
     const connection = this.solana.getConnection();
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
@@ -277,7 +409,7 @@ export class PaymentsService {
   }
 
   /**
-   * POST /payments/:paymentId/confirm — Buyer confirma recepción, libera escrow.
+   * POST /api/payments/:paymentId/confirm — Buyer confirma recepción, libera escrow.
    * Requiere JWT. El user.walletAddress debe coincidir con payment.buyerWallet.
    * Para el flujo con JWT: el backend NO puede firmar por el buyer.
    * El buyer debe firmar en el frontend y enviar la tx firmada, O el endpoint
@@ -285,10 +417,10 @@ export class PaymentsService {
    *
    * Según el PRD: "TrustPay llama a liberar_escrow" - el backend construye la tx.
    * El buyer firma con Phantom. Así que el flujo es:
-   * 1. Frontend llama POST /payments/:id/confirm con JWT (user = buyer)
+   * 1. Frontend llama POST /api/payments/:id/confirm con JWT (user = buyer)
    * 2. Backend devuelve la transacción serializada para que el frontend la firme con Phantom
    * 3. El frontend firma y envía la tx a Solana
-   * 4. Cuando la tx confirma, un cron o el frontend puede hacer polling a GET /payments/:id
+   * 4. Cuando la tx confirma, un cron o el frontend puede hacer polling a GET /api/payments/:id
    *
    * O: el backend espera que el frontend envíe la tx YA FIRMADA, y el backend la envía.
    * La segunda opción es más común: el backend construye, el cliente firma, el cliente envía.
@@ -364,12 +496,17 @@ export class PaymentsService {
 
     const amountSol =
       Number(BigInt(payment.amountLamports)) / LAMPORTS_PER_SOL;
+    const commissionSol = payment.commissionLamports
+      ? Number(BigInt(payment.commissionLamports)) / LAMPORTS_PER_SOL
+      : 0;
 
     return {
       paymentId: payment.id,
       orderId: payment.orderId,
       status: payment.status,
       amount: amountSol,
+      commissionAmount: commissionSol,
+      totalAmount: amountSol + commissionSol,
       escrowPda: payment.escrowPda,
       autoReleaseAt: payment.autoReleaseAt?.toISOString(),
       txHash:
@@ -384,7 +521,7 @@ export class PaymentsService {
   }
 
   /**
-   * POST /payments/:paymentId/ship — Seller marca como enviado.
+   * POST /api/payments/:paymentId/ship — Seller marca como enviado.
    * Activa el contador de auto-liberación (7 días).
    */
   async shipPayment(
@@ -475,12 +612,17 @@ export class PaymentsService {
 
     const data = payments.map((p) => {
       const amountSol = Number(BigInt(p.amountLamports)) / LAMPORTS_PER_SOL;
+      const commissionSol = p.commissionLamports
+        ? Number(BigInt(p.commissionLamports)) / LAMPORTS_PER_SOL
+        : 0;
       return {
         id: p.id,
         transactionId: p.transactionId,
         orderId: p.orderId,
         status: p.status,
         amount: amountSol,
+        commissionAmount: commissionSol,
+        totalAmount: amountSol + commissionSol,
         sellerWallet: p.sellerWallet,
         buyerWallet: p.buyerWallet,
         escrowPda: p.escrowPda,

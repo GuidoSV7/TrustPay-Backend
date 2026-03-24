@@ -2,7 +2,10 @@ import { z } from 'zod';
 import { isValidSolanaAddress } from '@solana-commerce/solana-pay';
 
 export const createPaymentQrSchema = z.object({
+  /** Obligatorio si usás credenciales generales de cuenta (API key sin negocio fijo). */
+  businessId: z.string().uuid().optional().nullable().transform((v) => v ?? null),
   orderId: z.string().optional().nullable().transform((v) => v ?? null),
+  /** Monto del pedido (lo que recibe el vendedor vía escrow). El comprador paga este monto + comisión de plataforma (configurable en admin). */
   amount: z.number().positive('El monto debe ser mayor a 0'),
   sellerWallet: z
     .string()

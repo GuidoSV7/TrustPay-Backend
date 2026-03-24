@@ -12,6 +12,7 @@ import { PaymentWebhookService } from './payment-webhook.service';
 import { SolanaModule } from '../solana/solana.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { ApiKeysModule } from '../api-keys/api-keys.module';
+import { MetricsModule } from '../metrics/metrics.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ApiKeysModule } from '../api-keys/api-keys.module';
     SolanaModule,
     WebhooksModule,
     ApiKeysModule,
+    MetricsModule,
   ],
   controllers: [PaymentsController, TxController, BusinessPaymentsController],
   providers: [PaymentWebhookService, PaymentsService, PaymentsWatcherService],

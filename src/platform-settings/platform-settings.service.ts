@@ -18,7 +18,7 @@ export class PlatformSettingsService {
     if (!row) {
       row = this.repo.create({
         id: SETTINGS_ROW_ID,
-        commissionBps: 0,
+        commissionBps: 100, // 1% por defecto
       });
       await this.repo.save(row);
     }

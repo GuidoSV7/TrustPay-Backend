@@ -11,7 +11,9 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { ApiKey } from './entities/api-key.entity';
 import { Business } from '../businesses/entities/business.entity';
+import { User } from '../users/entities/user.entity';
 import type { CreateApiKeyDto } from './schemas/create-api-key.schema';
+import type { CreateMerchantApiKeyDto } from './schemas/create-merchant-api-key.schema';
 import { UserRole } from '../users/entities/user.entity';
 import {
   PaginationDto,
@@ -28,6 +30,7 @@ export class ApiKeysService {
   constructor(
     @InjectRepository(ApiKey) private readonly repo: Repository<ApiKey>,
     @InjectRepository(Business) private readonly businessRepo: Repository<Business>,
+    @InjectRepository(User) private readonly userRepo: Repository<User>,
   ) {}
 
   private async findKeyOrFail(id: string, businessId: string): Promise<ApiKey> {
@@ -82,6 +85,7 @@ export class ApiKeysService {
     const row = this.repo.create({
       ...dto,
       businessId,
+      userId: null,
       publishableKey,
       secretKey: secretHash,
       secretKeyPreview: preview.slice(0, 20),
@@ -158,6 +162,99 @@ export class ApiKeysService {
     return { revoked: true };
   }
 
+  /**
+   * Credenciales generales del comercio (una clave para todos los negocios).
+   * Solo devnet por ahora.
+   */
+  async createForMerchant(userId: string, dto: CreateMerchantApiKeyDto) {
+    const u = await this.userRepo.findOne({ where: { id: userId } });
+    if (!u) throw new NotFoundException('Usuario no encontrado');
+    if (u.role !== UserRole.MERCHANT) {
+      throw new ForbiddenException('Solo comercios pueden crear credenciales generales');
+    }
+    const network = 'devnet';
+    let publishableKey = this.generatePublishable(network);
+    let exists = await this.repo.findOne({ where: { publishableKey } });
+    while (exists) {
+      publishableKey = this.generatePublishable(network);
+      exists = await this.repo.findOne({ where: { publishableKey } });
+    }
+    const plainSecret = this.generateSecret(network);
+    const secretHash = await bcrypt.hash(plainSecret, 10);
+    const preview =
+      plainSecret.slice(0, 10) + '...' + plainSecret.slice(-6);
+    const row = this.repo.create({
+      name: dto.name ?? null,
+      businessId: null,
+      userId,
+      publishableKey,
+      secretKey: secretHash,
+      secretKeyPreview: preview.slice(0, 20),
+      network,
+      revokedAt: null,
+      disabledAt: null,
+    });
+    await this.repo.save(row);
+    this.logger.log(`API key general (merchant): ${row.publishableKey} | user ${userId}`);
+    return {
+      id: row.id,
+      publishableKey: row.publishableKey,
+      secretKey: plainSecret,
+      secretKeyPreview: row.secretKeyPreview,
+      network: row.network,
+      name: row.name,
+      createdAt: row.createdAt,
+      message:
+        'Guarda el secretKey ahora; no se volverá a mostrar.',
+    };
+  }
+
+  async findAllForMerchant(
+    userId: string,
+    pagination: PaginationDto,
+  ): Promise<
+    PaginatedResponse<{
+      id: string;
+      name: string | null;
+      publishableKey: string;
+      secretKeyPreview: string | null;
+      network: string;
+      lastUsedAt: Date | null;
+      revokedAt: Date | null;
+      disabledAt: Date | null;
+      createdAt: Date;
+    }>
+  > {
+    const { page, limit, skip } = getPaginationParams(pagination);
+    const [keys, total] = await this.repo.findAndCount({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+      skip,
+      take: limit,
+    });
+    const data = keys.map((k) => ({
+      id: k.id,
+      name: k.name,
+      publishableKey: k.publishableKey,
+      secretKeyPreview: k.secretKeyPreview,
+      network: k.network,
+      lastUsedAt: k.lastUsedAt,
+      revokedAt: k.revokedAt,
+      disabledAt: k.disabledAt,
+      createdAt: k.createdAt,
+    }));
+    return paginated(data, total, page, limit);
+  }
+
+  async revokeForMerchant(id: string, userId: string) {
+    const k = await this.repo.findOne({ where: { id, userId } });
+    if (!k) throw new NotFoundException('API key no encontrada');
+    k.revokedAt = new Date();
+    await this.repo.save(k);
+    this.logger.log(`API key general revocada: ${k.publishableKey}`);
+    return { revoked: true };
+  }
+
   /** Validar publishable + secret (SDK) */
   async validateKeys(
     publishableKey: string,
@@ -204,15 +301,17 @@ export class ApiKeysService {
     const { page, limit, skip } = getPaginationParams(pagination);
     const qb = this.repo
       .createQueryBuilder('k')
-      .innerJoinAndSelect('k.business', 'b')
-      .innerJoinAndSelect('b.user', 'u')
+      .leftJoinAndSelect('k.business', 'b')
+      .leftJoinAndSelect('b.user', 'bu')
+      .leftJoinAndSelect('k.user', 'u')
       .orderBy('k.createdAt', 'DESC');
 
     if (search?.trim()) {
       const s = `%${search.trim()}%`;
-      qb.andWhere('(u.email ILIKE :s OR b.name ILIKE :s OR k.publishable_key ILIKE :s)', {
-        s,
-      });
+      qb.andWhere(
+        '(u.email ILIKE :s OR bu.email ILIKE :s OR b.name ILIKE :s OR k.publishable_key ILIKE :s)',
+        { s },
+      );
     }
 
     const [rows, total] = await qb.skip(skip).take(limit).getManyAndCount();
@@ -222,10 +321,10 @@ export class ApiKeysService {
 
     const data = rows.map((k) => ({
       id: k.id,
-      businessId: k.businessId,
+      businessId: k.businessId ?? '',
       businessName: k.business?.name ?? '',
-      merchantUserId: k.business?.userId ?? '',
-      merchantEmail: k.business?.user?.email ?? '',
+      merchantUserId: k.business?.userId ?? k.userId ?? '',
+      merchantEmail: k.business?.user?.email ?? k.user?.email ?? '',
       name: k.name,
       publishableKey: k.publishableKey,
       secretKeyPreview: k.secretKeyPreview,
