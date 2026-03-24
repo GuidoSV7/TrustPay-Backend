@@ -1,5 +1,12 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsString,
+  MinLength,
+  IsOptional,
+} from 'class-validator';
 
+/** Legacy class-validator; el registro real usa `register.schema.ts` (Zod). */
 export class RegisterDto {
   @IsString()
   @IsOptional()
@@ -17,4 +24,8 @@ export class RegisterDto {
   @IsString()
   @IsOptional()
   country?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  walletAddress: string;
 }

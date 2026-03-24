@@ -8,10 +8,11 @@ import { BusinessQrsController } from './business-qrs.controller';
 import { SolanaModule } from '../solana/solana.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { QrPaymentWatcherService } from './qr-payment-watcher.service';
+import { Transaction } from '../transactions/entities/transaction.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([QrCode, Business]),
+    TypeOrmModule.forFeature([QrCode, Business, Transaction]),
     SolanaModule,
     WebhooksModule,
   ],

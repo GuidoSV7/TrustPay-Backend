@@ -18,6 +18,9 @@ import { SolanaModule } from './solana/solana.module';
 import { QrCodesModule } from './qr-codes/qr-codes.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { TransactionsModule } from './transactions/transactions.module';
+import { PaymentsModule } from './payments/payments.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -36,6 +39,9 @@ import { ScheduleModule } from '@nestjs/schedule';
     QrCodesModule,
     ApiKeysModule,
     WebhooksModule,
+    TransactionsModule,
+    PaymentsModule,
+    MetricsModule,
     UsersModule,
     AuthModule,
     WebSocketModule,

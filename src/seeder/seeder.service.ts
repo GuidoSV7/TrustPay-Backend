@@ -33,6 +33,7 @@ export class SeederService {
         fullName: seedUser.fullName,
         role: seedUser.role,
         country: seedUser.country,
+        walletAddress: seedUser.walletAddress,
         isActive: true,
         isVerified: true,
       });

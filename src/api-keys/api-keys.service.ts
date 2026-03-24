@@ -19,6 +19,7 @@ import {
   PaginatedResponse,
   paginated,
 } from '../common/dto/pagination.dto';
+import type { AdminApiKeySetDisabledDto } from './schemas/admin-api-key.schema';
 
 @Injectable()
 export class ApiKeysService {
@@ -86,6 +87,7 @@ export class ApiKeysService {
       secretKeyPreview: preview.slice(0, 20),
       network,
       revokedAt: null,
+      disabledAt: null,
     });
     await this.repo.save(row);
     this.logger.log(`API key creada: ${row.publishableKey} (negocio ${businessId})`);
@@ -116,6 +118,7 @@ export class ApiKeysService {
       network: string;
       lastUsedAt: Date | null;
       revokedAt: Date | null;
+      disabledAt: Date | null;
       createdAt: Date;
     }>
   > {
@@ -135,6 +138,7 @@ export class ApiKeysService {
       network: k.network,
       lastUsedAt: k.lastUsedAt,
       revokedAt: k.revokedAt,
+      disabledAt: k.disabledAt,
       createdAt: k.createdAt,
     }));
     return paginated(data, total, page, limit);
@@ -162,11 +166,109 @@ export class ApiKeysService {
     const k = await this.repo.findOne({
       where: { publishableKey },
     });
-    if (!k || k.revokedAt) return null;
+    if (!k || k.revokedAt || k.disabledAt) return null;
     const ok = await bcrypt.compare(secret, k.secretKey);
     if (!ok) return null;
     k.lastUsedAt = new Date();
     await this.repo.save(k);
     return k;
+  }
+
+  /**
+   * Listado global para admin: credenciales por negocio / merchant.
+   * El secreto completo no se puede recuperar (bcrypt); solo preview.
+   */
+  async adminFindAll(
+    pagination: PaginationDto,
+    search?: string,
+  ): Promise<
+    PaginatedResponse<{
+      id: string;
+      businessId: string;
+      businessName: string;
+      merchantUserId: string;
+      merchantEmail: string;
+      name: string | null;
+      publishableKey: string;
+      secretKeyPreview: string | null;
+      /** El valor sk_* completo no está almacenado en claro (solo hash). */
+      secretKeyFullAvailable: false;
+      secretKeyNote: string;
+      network: string;
+      lastUsedAt: Date | null;
+      revokedAt: Date | null;
+      disabledAt: Date | null;
+      createdAt: Date;
+    }>
+  > {
+    const { page, limit, skip } = getPaginationParams(pagination);
+    const qb = this.repo
+      .createQueryBuilder('k')
+      .innerJoinAndSelect('k.business', 'b')
+      .innerJoinAndSelect('b.user', 'u')
+      .orderBy('k.createdAt', 'DESC');
+
+    if (search?.trim()) {
+      const s = `%${search.trim()}%`;
+      qb.andWhere('(u.email ILIKE :s OR b.name ILIKE :s OR k.publishable_key ILIKE :s)', {
+        s,
+      });
+    }
+
+    const [rows, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    const secretNote =
+      'El secret completo (sk_*) solo se mostró una vez al crear la clave; en BD se guarda como hash bcrypt.';
+
+    const data = rows.map((k) => ({
+      id: k.id,
+      businessId: k.businessId,
+      businessName: k.business?.name ?? '',
+      merchantUserId: k.business?.userId ?? '',
+      merchantEmail: k.business?.user?.email ?? '',
+      name: k.name,
+      publishableKey: k.publishableKey,
+      secretKeyPreview: k.secretKeyPreview,
+      secretKeyFullAvailable: false as const,
+      secretKeyNote: secretNote,
+      network: k.network,
+      lastUsedAt: k.lastUsedAt,
+      revokedAt: k.revokedAt,
+      disabledAt: k.disabledAt,
+      createdAt: k.createdAt,
+    }));
+
+    return paginated(data, total, page, limit);
+  }
+
+  /** Deshabilitar o reactivar API key (solo admin). */
+  async adminSetDisabled(
+    id: string,
+    dto: AdminApiKeySetDisabledDto,
+  ): Promise<{
+    id: string;
+    disabled: boolean;
+    disabledAt: string | null;
+  }> {
+    const k = await this.repo.findOne({
+      where: { id },
+      relations: ['business', 'business.user'],
+    });
+    if (!k) throw new NotFoundException('API key no encontrada');
+    if (k.revokedAt) {
+      throw new BadRequestException(
+        'Esta clave está revocada; no se puede activar/desactivar por admin',
+      );
+    }
+    k.disabledAt = dto.disabled ? new Date() : null;
+    await this.repo.save(k);
+    this.logger.log(
+      `API key ${id} admin disabled=${dto.disabled} | publishable=${k.publishableKey}`,
+    );
+    return {
+      id: k.id,
+      disabled: !!k.disabledAt,
+      disabledAt: k.disabledAt?.toISOString() ?? null,
+    };
   }
 }

@@ -5,7 +5,6 @@ import {
   createQRDataURL,
   createQROptions,
   createRecipient,
-  createSPLToken,
   isValidSolanaAddress,
 } from '@solana-commerce/solana-pay';
 
@@ -14,9 +13,12 @@ export type BuildPaymentQrInput = {
   recipientWallet: string;
   /** Etiqueta mostrada en la billetera */
   label: string;
-  /** Monto en unidades atómicas (lamports para SOL / unidades mínimas para SPL). null = monto libre en wallet */
+  /** Monto en lamports (SOL). null = monto libre en wallet */
   amountLamports: string | null;
-  /** Mint SPL o null para SOL */
+  /**
+   * Reservado para pagos SPL (USDC, etc.) — pendiente de producto.
+   * Hoy debe ser null; si llega un mint, se rechaza en capa HTTP (schemas).
+   */
   tokenMint: string | null;
 };
 
@@ -63,13 +65,10 @@ export class SolanaPayQrService {
 
     const referenceKp = Keypair.generate();
 
+    // Solo SOL nativo. SPL: pendiente (createSPLToken / validación de decimales, etc.).
     const payUrl = encodeURL({
       recipient: createRecipient(w),
       amount,
-      splToken:
-        input.tokenMint != null && input.tokenMint.trim() !== ''
-          ? createSPLToken(input.tokenMint.trim())
-          : undefined,
       reference: createRecipient(referenceKp.publicKey.toBase58()),
       label: input.label,
       message: `TrustPay · ${input.label}`,
@@ -88,6 +87,47 @@ export class SolanaPayQrService {
       solanaPayUrl: urlString,
       qrImageDataUrl,
       referencePubkey: referenceKp.publicKey.toBase58(),
+    };
+  }
+
+  /**
+   * Genera URL Solana Pay en modo Transaction Request (apunta a endpoint del backend).
+   * Phantom llamará GET y POST al link para obtener la transacción de crear_escrow.
+   */
+  async buildEscrowTransactionRequestQr(linkUrl: string, label: string, message?: string): Promise<{
+    solanaPayUrl: string;
+    qrImageDataUrl: string;
+  }> {
+    const parsed = new URL(linkUrl);
+    if (parsed.protocol !== 'https:' && !linkUrl.startsWith('http://localhost')) {
+      throw new BadRequestException('El link debe ser HTTPS (o localhost en desarrollo)');
+    }
+    // Solana Pay exige https: — en localhost convertir http -> https
+    const url =
+      parsed.protocol === 'http:' && parsed.hostname === 'localhost'
+        ? new URL(linkUrl.replace(/^http:\/\//, 'https://'))
+        : parsed;
+
+    const payUrl = encodeURL({
+      link: url,
+      label,
+      message: message ?? `TrustPay · ${label}`,
+    });
+
+    // Phantom espera solana:https://... para transaction request; la librería devuelve solo https://...
+    const raw = payUrl.toString();
+    const urlString = raw.startsWith('https://') ? `solana:${raw}` : raw;
+    const opts = createQROptions(
+      urlString,
+      SolanaPayQrService.QR_SIZE,
+      'white',
+      'black',
+    );
+    const qrImageDataUrl = await createQRDataURL(urlString, opts);
+
+    return {
+      solanaPayUrl: urlString,
+      qrImageDataUrl,
     };
   }
 }

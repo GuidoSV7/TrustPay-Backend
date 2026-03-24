@@ -7,6 +7,9 @@ import { ApiKey } from '../api-keys/entities/api-key.entity';
 import { WebhookEndpoint } from '../webhooks/entities/webhook-endpoint.entity';
 import { WebhookSubscription } from '../webhooks/entities/webhook-subscription.entity';
 import { WebhookDelivery } from '../webhooks/entities/webhook-delivery.entity';
+import { Transaction } from '../transactions/entities/transaction.entity';
+import { Payment } from '../payments/entities/payment.entity';
+import { PlatformSettings } from '../platform-settings/entities/platform-settings.entity';
 
 export const typeOrmEntities = [
   User,
@@ -16,6 +19,9 @@ export const typeOrmEntities = [
   WebhookEndpoint,
   WebhookSubscription,
   WebhookDelivery,
+  Transaction,
+  Payment,
+  PlatformSettings,
 ];
 
 function pgSsl(configService: ConfigService): boolean | object {

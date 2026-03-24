@@ -4,22 +4,22 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
 import {
-  findReference,
   validateTransfer,
-  FindReferenceError,
   ValidateTransferError,
 } from '@solana/pay';
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import BigNumber from 'bignumber.js';
 import { QrCode } from './entities/qr-code.entity';
+import { Transaction } from '../transactions/entities/transaction.entity';
 import { SolanaService } from '../solana/solana.service';
 import { WebhookDeliveryService } from '../webhooks/webhook-delivery.service';
 
-const PENDING_BATCH = 50;
+const QR_BATCH = 25;
+const SIG_LIMIT = 50;
 
 /**
- * Sondea la RPC para el primer pago que referencia el pubkey del QR (Solana Pay).
- * MVP: solo el primer pago por QR dispara webhook y deja de sondear.
+ * Sondea la RPC por firmas que referencian el pubkey del QR; persiste cada transacción en `transactions`.
+ * El primer pago por QR también actualiza `qr_codes` y dispara webhook `payment.confirmed`.
  */
 @Injectable()
 export class QrPaymentWatcherService {
@@ -29,14 +29,11 @@ export class QrPaymentWatcherService {
     private readonly config: ConfigService,
     private readonly solana: SolanaService,
     @InjectRepository(QrCode) private readonly qrRepo: Repository<QrCode>,
+    @InjectRepository(Transaction) private readonly transactionRepo: Repository<Transaction>,
     private readonly webhookDelivery: WebhookDeliveryService,
   ) {}
 
   private amountForValidation(qr: QrCode): BigNumber {
-    if (qr.tokenMint) {
-      // SPL: sin decimales del mint en BD; validamos recipient + token + reference.
-      return new BigNumber(0);
-    }
     if (qr.amountLamports != null && String(qr.amountLamports).trim() !== '') {
       return new BigNumber(String(qr.amountLamports)).dividedBy(LAMPORTS_PER_SOL);
     }
@@ -49,80 +46,130 @@ export class QrPaymentWatcherService {
       return;
     }
 
-    const pending = await this.qrRepo.find({
+    const qrs = await this.qrRepo.find({
       where: {
-        paymentConfirmedAt: IsNull(),
         isActive: true,
         referencePubkey: Not(IsNull()),
       },
       relations: ['business'],
-      order: { createdAt: 'ASC' },
-      take: PENDING_BATCH,
+      order: { updatedAt: 'ASC' },
+      take: QR_BATCH,
     });
 
     const connection = this.solana.getConnection();
 
-    for (const qr of pending) {
+    for (const qr of qrs) {
       if (!qr.referencePubkey || !qr.business) continue;
+      if (qr.tokenMint) {
+        this.logger.debug(
+          `QR ${qr.id}: SPL no soportado; omitiendo`,
+        );
+        continue;
+      }
 
+      const refPk = new PublicKey(qr.referencePubkey);
+      let sigs: { signature: string }[];
       try {
-        const refPk = new PublicKey(qr.referencePubkey);
-        const sigInfo = await findReference(connection, refPk, {
-          finality: 'confirmed',
+        sigs = await connection.getSignaturesForAddress(
+          refPk,
+          { limit: SIG_LIMIT },
+          'confirmed',
+        );
+      } catch (e) {
+        this.logger.warn(
+          `QR ${qr.id}: getSignaturesForAddress — ${(e as Error).message}`,
+        );
+        continue;
+      }
+
+      const chronological = [...sigs].reverse();
+
+      let firstForQrHandled = !!qr.paymentConfirmedAt;
+
+      for (const sigInfo of chronological) {
+        const already = await this.transactionRepo.findOne({
+          where: { signature: sigInfo.signature },
+          select: ['id'],
         });
-        const signature = sigInfo.signature;
+        if (already) continue;
 
         const recipient = new PublicKey(qr.business.walletAddress);
         const amount = this.amountForValidation(qr);
-        const splToken = qr.tokenMint
-          ? new PublicKey(qr.tokenMint)
-          : undefined;
 
-        await validateTransfer(connection, signature, {
-          recipient,
-          amount,
-          splToken,
-          reference: refPk,
-        });
-
-        const updateResult = await this.qrRepo.update(
-          { id: qr.id, paymentConfirmedAt: IsNull() },
-          {
-            paymentConfirmedAt: new Date(),
-            paymentSignature: signature,
-          },
-        );
-
-        if (!updateResult.affected) {
-          continue;
+        let txResponse: Awaited<ReturnType<typeof validateTransfer>>;
+        try {
+          txResponse = await validateTransfer(connection, sigInfo.signature, {
+            recipient,
+            amount,
+            reference: refPk,
+          });
+        } catch (e) {
+          if (e instanceof ValidateTransferError) {
+            this.logger.debug(
+              `QR ${qr.id} sig ${sigInfo.signature.slice(0, 8)}…: ${e.message}`,
+            );
+            continue;
+          }
+          throw e;
         }
 
-        await this.webhookDelivery.dispatch(qr.businessId, 'payment.confirmed', {
-          qrCodeId: qr.id,
+        const slot =
+          txResponse.slot != null ? String(txResponse.slot) : null;
+        const blockTime = (txResponse as { blockTime?: number | null })
+          .blockTime;
+        const confirmedAt =
+          blockTime != null
+            ? new Date(blockTime * 1000)
+            : new Date();
+
+        const row = this.transactionRepo.create({
           businessId: qr.businessId,
-          signature,
+          qrCodeId: qr.id,
+          signature: sigInfo.signature,
           referencePubkey: qr.referencePubkey,
           amountLamports: qr.amountLamports,
           tokenMint: qr.tokenMint,
-          confirmedAt: new Date().toISOString(),
+          slot,
+          confirmedAt,
         });
 
-        this.logger.log(
-          `Pago confirmado QR ${qr.id} | sig ${signature.slice(0, 16)}…`,
-        );
-      } catch (e) {
-        if (e instanceof FindReferenceError) {
-          continue;
+        try {
+          await this.transactionRepo.save(row);
+        } catch (err: unknown) {
+          if ((err as { code?: string })?.code === '23505') {
+            continue;
+          }
+          throw err;
         }
-        if (e instanceof ValidateTransferError) {
-          this.logger.debug(
-            `QR ${qr.id}: tx aún no válida para Solana Pay — ${e.message}`,
+
+        if (!firstForQrHandled) {
+          const updateResult = await this.qrRepo.update(
+            { id: qr.id },
+            {
+              paymentConfirmedAt: confirmedAt,
+              paymentSignature: sigInfo.signature,
+            },
           );
-          continue;
+          if (updateResult.affected) {
+            firstForQrHandled = true;
+            await this.webhookDelivery.dispatch(qr.businessId, 'payment.confirmed', {
+              qrCodeId: qr.id,
+              businessId: qr.businessId,
+              signature: sigInfo.signature,
+              referencePubkey: qr.referencePubkey,
+              amountLamports: qr.amountLamports,
+              tokenMint: qr.tokenMint,
+              confirmedAt: confirmedAt.toISOString(),
+            });
+            this.logger.log(
+              `Primer pago QR ${qr.id} | sig ${sigInfo.signature.slice(0, 16)}…`,
+            );
+          }
+        } else {
+          this.logger.log(
+            `Pago adicional QR ${qr.id} | sig ${sigInfo.signature.slice(0, 16)}…`,
+          );
         }
-        this.logger.warn(
-          `QR ${qr.id}: error al verificar pago — ${(e as Error).message}`,
-        );
       }
     }
   }

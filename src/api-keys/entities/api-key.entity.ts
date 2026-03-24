@@ -41,6 +41,10 @@ export class ApiKey {
   @Column({ name: 'revoked_at', type: 'timestamptz', nullable: true })
   revokedAt: Date | null;
 
+  /** Deshabilitada por admin: no sirve para API escrow hasta reactivar. */
+  @Column({ name: 'disabled_at', type: 'timestamptz', nullable: true })
+  disabledAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

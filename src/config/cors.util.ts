@@ -8,11 +8,16 @@ const DEFAULT_ORIGIN = 'http://localhost:3000';
  * CORS_ORIGIN=http://localhost:3000
  * CORS_ORIGIN=http://localhost:3000,http://localhost:5173,https://app.midominio.com
  */
-export function parseCorsOrigins(raw: string | undefined): string | string[] {
+export function parseCorsOrigins(raw: string | undefined): string | string[] | true {
   if (!raw?.trim()) {
     return DEFAULT_ORIGIN;
   }
-  const parts = raw
+  const trimmed = raw.trim();
+  // Permitir todo (útil para Phantom en dev con ngrok)
+  if (trimmed === '*' || trimmed.toLowerCase() === 'true') {
+    return true;
+  }
+  const parts = trimmed
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);

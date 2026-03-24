@@ -12,6 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { User, UserRole } from '../users/entities/user.entity';
 import type { LoginDto } from './schemas/login.schema';
 import type { RegisterDto } from './schemas/register.schema';
+import { solanaAddressesEqual } from '../common/utils/solana-address.util';
 
 @Injectable()
 export class AuthService {
@@ -23,7 +24,7 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
-    const { email, password } = loginDto;
+    const { email, password, walletAddress: loginWallet } = loginDto;
     const normalizedEmail = email.toLowerCase().trim();
     const user = await this.userRepository.findOne({
       where: { email: normalizedEmail },
@@ -53,6 +54,24 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    if (user.role !== UserRole.ADMIN) {
+      if (!user.walletAddress) {
+        throw new UnauthorizedException(
+          'Tu cuenta no tiene una wallet asociada. Contacta al administrador.',
+        );
+      }
+      if (!loginWallet) {
+        throw new UnauthorizedException(
+          'La wallet Solana es obligatoria para iniciar sesión.',
+        );
+      }
+      if (!solanaAddressesEqual(user.walletAddress, loginWallet)) {
+        throw new UnauthorizedException(
+          'La wallet no coincide con la registrada en tu cuenta.',
+        );
+      }
     }
 
     const payload = { sub: user.id, email: user.email, role: user.role };
@@ -97,7 +116,7 @@ export class AuthService {
       country: userDetails.country ?? 'Bolivia',
       role: UserRole.MERCHANT,
       isActive: true,
-      isVerified: false,
+      isVerified: true,
     });
     await this.userRepository.save(user);
 
@@ -111,6 +130,8 @@ export class AuthService {
         email: user.email,
         role: user.role,
         country: user.country,
+        walletAddress: user.walletAddress,
+        isVerified: user.isVerified,
       },
       token,
     };

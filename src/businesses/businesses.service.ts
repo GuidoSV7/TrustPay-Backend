@@ -158,7 +158,10 @@ export class BusinessesService {
     const b = await this.findBusinessOrFail(id);
 
     // Primero verificamos on-chain; si lanza excepción, la BD no cambia
-    const solanaTxVerify = await this.solana.verificarNegocio(b.walletAddress);
+    const solanaTxVerify = await this.solana.verificarNegocio(
+      b.walletAddress,
+      b.id,
+    );
 
     b.isVerified = true;
     b.solanaTxVerify = solanaTxVerify;

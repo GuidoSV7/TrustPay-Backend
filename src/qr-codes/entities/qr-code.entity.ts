@@ -30,6 +30,7 @@ export class QrCode {
   @Column({ name: 'amount_lamports', type: 'bigint', nullable: true })
   amountLamports: string | null;
 
+  /** Reservado para SPL (futuro). Hoy los QR nuevos van sin mint (solo SOL). */
   @Column({ name: 'token_mint', type: 'varchar', length: 255, nullable: true })
   tokenMint: string | null;
 
